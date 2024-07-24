@@ -1,6 +1,6 @@
 # Configuration
 
-1. **Connect button to pin 2.** This button is for getting ESP32 into config mode.
+1. **Connect a button to pin 2.** This button is for getting ESP32 into config mode.
 2. **To get into config mode, press and hold the pair button, then press the reset button.**
 3. **Once done, the ESP goes to access point mode. Depending on node or router, the SSID will change.**
 4. **Connect to the respective ESP access point, then on your browser go to this URL: [http://192.168.4.1](http://192.168.4.1)**
