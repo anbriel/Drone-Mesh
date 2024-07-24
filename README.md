@@ -8,7 +8,7 @@
 ### Router Configuration
 
 <img src="images/router-config.png" alt="Router Configuration Image" width="500"/> 
-Configure the necessary parameters and note the Root ID. In this case, it is `3813223257`.
+Configure the necessary parameters and note the Root ID. In this case, it is `3813146501`.
 
 ### Node Configuration
 
