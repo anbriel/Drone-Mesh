@@ -1,3 +1,10 @@
+# Installation
+
+1. **Download release binary.**
+2. **Upload them to ESP via ESP flash tools.**  
+   <img src="images/eps32-flash.png" alt="Installation Image" width="500"/>
+
+
 # Configuration
 
 1. **Connect a button to pin 2.** This button is for getting ESP32 into config mode.
