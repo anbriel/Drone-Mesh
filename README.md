@@ -3,7 +3,7 @@
 1. **Download release binary.**
 2. **Upload them to ESP via ESP flash tools.**  
    <img src="images/eps32-flash.png" alt="Installation Image" width="500"/>
-
+3. **Do the configuration step twise, because rootID for devices wont display correctly at first boot**
 
 # Configuration
 
