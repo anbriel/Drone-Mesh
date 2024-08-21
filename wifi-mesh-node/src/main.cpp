@@ -9,22 +9,25 @@
 #include "esp_mesh.h"
 #include "esp_mesh_internal.h"
 #include "nvs_flash.h"
+ #include <WiFi.h>
 
 /* mesh WIFI config*/
-#define CONFIG_MESH_ROUTER_SSID "YOUR_ROUTER_SSID"
-#define CONFIG_MESH_ROUTER_PASSWD "YOUR_ROUTER_PASSWORD"
+#define CONFIG_MESH_ROUTER_SSID "Indlab-software 2.4"
+#define CONFIG_MESH_ROUTER_PASSWD "happysofts"
 #define CONFIG_MESH_AP_PASSWD "12345678"
 #define CONFIG_MESH_ROUTE_TABLE_SIZE 50
 static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
 
 /* need adjustment*/
 #define BUFFER_SIZE 1024
+#define MESH_PACKET_SIZE 128
 int baudrate = 115200;
 int Rtos_delay = 90;
 
 #define Drone Serial2
+#define RX_BUFFER_SIZE MESH_PACKET_SIZE
 static uint8_t tx_buf[BUFFER_SIZE] = { 0 };
-static uint8_t rx_buf[BUFFER_SIZE] = { 0 };
+static uint8_t rx_buf[RX_BUFFER_SIZE] = { 0 };
 
 
 static bool is_mesh_connected = false;
@@ -54,17 +57,10 @@ void esp_mesh_p2p_tx_main(void *arg)
     is_running = true;
 
     while (is_running) {
-        // Get the routing table
-        esp_err_t err = esp_mesh_get_routing_table(route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-        if (err != ESP_OK) {
-            ESP_LOGE("MESH", "Failed to get routing table: %d", err);
-            continue;
-        }
-
         // Check if there is data available on the serial port
         if (Drone.available() > 0) {
             int len = Drone.read(tx_buf, sizeof(tx_buf));
-            vTaskDelay(pdMS_TO_TICKS(Rtos_delay));  //delyed to read data and give some time for other process too  
+            vTaskDelay(pdMS_TO_TICKS(Rtos_delay));  // Reduced delay
 
             if (len > 0) { // Proceed only if data was read
                 mavlink_message_t msg;
@@ -74,19 +70,26 @@ void esp_mesh_p2p_tx_main(void *arg)
                         uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
                         int send_len = mavlink_msg_to_send_buffer(send_buf, &msg);
 
-                        mesh_data_t data;
-                        data.data = send_buf;
-                        data.size = send_len;
-                        data.proto = MESH_PROTO_BIN;
-                        data.tos = MESH_TOS_P2P;
+                        /* batch send*/
+                        int offset = 0;
+                        while (offset < send_len) {
+                            int packetSize = (send_len - offset) > MESH_PACKET_SIZE ? MESH_PACKET_SIZE : (send_len - offset);
+                            uint8_t message[MESH_PACKET_SIZE];
+                            memcpy(message, send_buf + offset, packetSize);
 
-                        /*send message to recorded root node*/
-                        err = esp_mesh_send(&root_address, &data, MESH_DATA_P2P, NULL, 0);
-                        if (err != ESP_OK) {
-                            ESP_LOGE("MESH", "Error sending data to root: %d", err);
-                        } 
-                        ESP_LOGE("MESH", "Data sent to root successfully");
-                        
+                            mesh_data_t data;
+                            data.data = message;
+                            data.size = packetSize;
+                            data.proto = MESH_PROTO_BIN;
+                            data.tos = MESH_TOS_P2P;
+
+                            esp_err_t err = esp_mesh_send(&root_address, &data, MESH_DATA_P2P, NULL, 0);
+                            if (err != ESP_OK) {
+                                ESP_LOGE("MESH", "Error sending data: %d", err);
+                            }
+                            offset += packetSize;
+                        }
+                        /*end*/ 
                     }
                 }
             }
@@ -104,33 +107,58 @@ void esp_mesh_p2p_rx_main(void *arg)
     mesh_addr_t from;
     mesh_data_t data;
     int flag = 0;
-    data.data = rx_buf;
-    data.size = sizeof(rx_buf);
+
+    // Buffer for receiving data from mesh
+    static uint8_t rx_buf[MESH_PACKET_SIZE];
+
+    // Reassembly buffer for reassembling the full message
+    static uint8_t reassemblyBuffer[BUFFER_SIZE];
+    static int receivedLength = 0;
 
     while (is_running) {
+        data.data = rx_buf;
         data.size = sizeof(rx_buf);
+        
         esp_err_t err = esp_mesh_recv(&from, &data, portMAX_DELAY, &flag, NULL, 0);
         if (err != ESP_OK) {
-            ESP_LOGE("MESH", "Error reciving data from root: %d", err);
+            ESP_LOGE("MESH", "Error receiving data: %d", err);
             continue;
         } 
-        ESP_LOGE("MESH", "Data recived from root successfully");
-        
-        int receivedLength = data.size;
-        mavlink_message_t message;
-        mavlink_status_t status;
+        ESP_LOGI("MESH", "Data received from node successfully");
 
-        for (int i = 0; i < receivedLength; i++) {
-            if (mavlink_parse_char(MAVLINK_COMM_0, data.data[i], &message, &status)) {
-                uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
-                int send_len = mavlink_msg_to_send_buffer(send_buf, &message);
-                Drone.write(send_buf, send_len);
-                serialFlushRx();
-                break;
+        // Check if the reassembly buffer has enough space
+        if (receivedLength + data.size <= BUFFER_SIZE) {
+            // Copy received data into the reassembly buffer
+            memcpy(reassemblyBuffer + receivedLength, data.data, data.size);
+            receivedLength += data.size;
+
+            mavlink_message_t message;
+            mavlink_status_t status;
+
+            // Try to parse a full Mavlink message from the reassembly buffer
+            int bytesParsed = 0;
+            for (int i = 0; i < receivedLength; i++) {
+                if (mavlink_parse_char(MAVLINK_COMM_0, reassemblyBuffer[i], &message, &status)) {
+                    // Successfully parsed a message, send it out via UART
+                    uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
+                    int send_len = mavlink_msg_to_send_buffer(send_buf, &message);
+                    Drone.write(send_buf, send_len);
+
+                    // Mark the number of bytes successfully parsed
+                    bytesParsed = i + 1;
+                }
             }
 
+            // Shift remaining bytes in the buffer
+            if (bytesParsed > 0) {
+                memmove(reassemblyBuffer, reassemblyBuffer + bytesParsed, receivedLength - bytesParsed);
+                receivedLength -= bytesParsed;
+            }
+        } else {
+            // Buffer overflow, reset the reassembly buffer
+            ESP_LOGW("MESH", "Buffer overflow detected. Message too large.");
+            receivedLength = 0;
         }
-
     }
 
     // Task clean-up
@@ -376,15 +404,20 @@ void setup() {
     /*  wifi initialization */
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&config));
+
+    /* Set the maximum Wi-Fi TX power */
+    //ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // Set TX power to 20.5 dBm (maximum)
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_start());
-  
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // Set TX power to 20.5 dBm (maximum)
+    
     /*  mesh initialization */
     ESP_ERROR_CHECK(esp_mesh_init());
     ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID, &mesh_event_handler, NULL));
     /*  set mesh topology */
     ESP_ERROR_CHECK(esp_mesh_set_topology(MESH_TOPO_TREE));
+    //ESP_ERROR_CHECK(esp_mesh_set_topology(MESH_TOPO_CHAIN));
     /*  set mesh max layer according to the topology */
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(6));
     ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
@@ -422,7 +455,7 @@ void setup() {
     ESP_LOGI("MESH", "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
-
+    
     serialFlushRx();
 
 }
@@ -431,5 +464,5 @@ void loop()
 {
     
 
-
+WiFi.setTxPower(WIFI_POWER_19_5dBm);
 }

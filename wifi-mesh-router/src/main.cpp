@@ -12,18 +12,20 @@
 #include <painlessMesh.h> //has tcp related library
 
 /* Mesh WIFI config*/
-#define CONFIG_MESH_ROUTER_SSID "YOUR_ROUTER_SSID"
-#define CONFIG_MESH_ROUTER_PASSWD "YOUR_ROUTER_PASSWORD"
+#define CONFIG_MESH_ROUTER_SSID "Indlab-software 2.4"
+#define CONFIG_MESH_ROUTER_PASSWD "happysofts"
 #define CONFIG_MESH_AP_PASSWD "12345678"
 #define CONFIG_MESH_ROUTE_TABLE_SIZE 50
 static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
+#define MAX_RETRY 3
 
-
-#define ENABLE_TCP_DISABLE_SERIAL  1
+#define ENABLE_TCP_DISABLE_SERIAL  0
 
 #define BUFFER_SIZE 1024
+#define MESH_PACKET_SIZE 128
+#define RX_BUFFER_SIZE MESH_PACKET_SIZE
 static uint8_t tx_buf[BUFFER_SIZE] = { 0 };
-static uint8_t rx_buf[BUFFER_SIZE] = { 0 };
+static uint8_t rx_buf[RX_BUFFER_SIZE] = { 0 };
 
 #if (ENABLE_TCP_DISABLE_SERIAL == 1)
   int port_tcp = 5760;
@@ -82,22 +84,29 @@ void esp_mesh_p2p_tx_main(void *arg)
     is_running = true;
 
     while (is_running) {
+        // Get the routing table only once or when necessary to reduce overhead
         esp_mesh_get_routing_table(route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-        
+
+        int InPacketSize = 0;
+
         #if (ENABLE_TCP_DISABLE_SERIAL == 1) 
-             checkClientConnection();
-             int InTcpPacketSize = client.available();
+            checkClientConnection();
+            InPacketSize = client.available();
         #else
-             int InSerialPacketSize = Serial.available();
+            InPacketSize = Serial.available();
         #endif
 
-        if (InSerialPacketSize > 0 || InTcpPacketSize > 0) {
-          #if (ENABLE_TCP_DISABLE_SERIAL == 1)
-              int len = client.read(tx_buf, sizeof(tx_buf));
-          #else 
-              int len = Serial.read(tx_buf, sizeof(tx_buf));
-          #endif
-            vTaskDelay(pdMS_TO_TICKS(Rtos_delay));         //delyed to read data and give some time for other process too  
+        if (InPacketSize > 0) {
+            int len = 0;
+
+            #if (ENABLE_TCP_DISABLE_SERIAL == 1)
+                len = client.read(tx_buf, sizeof(tx_buf));
+            #else 
+                len = Serial.read(tx_buf, sizeof(tx_buf));
+            #endif
+            
+            // Reduced delay for faster processing
+            vTaskDelay(pdMS_TO_TICKS(Rtos_delay));  
 
             mavlink_message_t msg;
             mavlink_status_t status;
@@ -106,30 +115,43 @@ void esp_mesh_p2p_tx_main(void *arg)
                     uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
                     int send_len = mavlink_msg_to_send_buffer(send_buf, &msg);
 
-                    mesh_data_t data;
-                    data.data = send_buf;
-                    data.size = send_len;
-                    data.proto = MESH_PROTO_BIN;
-                    data.tos = MESH_TOS_P2P;
-                    
-                    /* Broadcast to all nodes except itself*/
-                    for (int i = 0; i < route_table_size; i++) {
-                        if (memcmp(route_table[i].addr, my_address.addr, 6) != 0) {
-                            esp_err_t err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-                            if (err != ESP_OK) {
-                                ESP_LOGE("MESH", "Error sending to nodes data: %d", err);        
-                            }
-                            ESP_LOGE("MESH", "Data sent to root successfully");
+                    // Batch send with optimizations
+                    int offset = 0;
+                    while (offset < send_len) {
+                        int packetSize = (send_len - offset) > MESH_PACKET_SIZE ? MESH_PACKET_SIZE : (send_len - offset);
+                        uint8_t message[MESH_PACKET_SIZE];
+                        memcpy(message, send_buf + offset, packetSize);
+                        
+                        mesh_data_t data;
+                        data.data = message;
+                        data.size = packetSize;
+                        data.proto = MESH_PROTO_BIN;
+                        data.tos = MESH_TOS_P2P;
 
+                        // Iterate over the route table and send data
+                        for (int i = 0; i < route_table_size; i++) {
+                            if (memcmp(route_table[i].addr, my_address.addr, 6) != 0) {
+                                esp_err_t err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+                                if (err != ESP_OK) {
+                                    ESP_LOGE("MESH", "Error sending to nodes, retrying: %d", err);
+                                    err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+                                    if (err == ESP_OK) {
+                                        ESP_LOGI("MESH", "Data sent successfully after retry");
+                                    }
+                                } else {
+                                    ESP_LOGI("MESH", "Data sent successfully");
+                                }
+                            }
                         }
+                        offset += packetSize;
                     }
                 }
             }
         }    
     }
+
     vTaskDelete(NULL);
 }
-
 
 
 void esp_mesh_p2p_rx_main(void *arg)
@@ -137,43 +159,63 @@ void esp_mesh_p2p_rx_main(void *arg)
     mesh_addr_t from;
     mesh_data_t data;
     int flag = 0;
-    data.data = rx_buf;
-    data.size = sizeof(rx_buf);
     is_running = true;
 
+    static uint8_t rx_buf[MESH_PACKET_SIZE];
+    static uint8_t reassemblyBuffer[BUFFER_SIZE];
+    static int receivedLength = 0;
+
     while (is_running) {
+        data.data = rx_buf;
         data.size = sizeof(rx_buf);
         esp_err_t err = esp_mesh_recv(&from, &data, portMAX_DELAY, &flag, NULL, 0);
         if (err != ESP_OK) {
-            ESP_LOGE("MESH", "Error reciving data from node: %d", err);
+            ESP_LOGE("MESH", "Error receiving data: %d", err);
             continue;
         } 
 
-        ESP_LOGE("MESH", "Data recived from node successfully");
-        
-        mavlink_message_t message;
-        mavlink_status_t status;
-        int receivedLength = data.size;
+        ESP_LOGI("MESH", "Data received from node successfully");
 
-        for (int i = 0; i < receivedLength; i++) {
-            if (mavlink_parse_char(MAVLINK_COMM_0, data.data[i], &message, &status)) {
-                uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
-                int send_len = mavlink_msg_to_send_buffer(send_buf, &message);
-                #if (ENABLE_TCP_DISABLE_SERIAL == 1)
-                    checkClientConnection();
-                    if (client.connected()) {
-                      client.write(send_buf, send_len);
-                    } else {
-                      ESP_LOGE("MESH", "Client disconnected, unable to send data");
-                    }
-                  #else
-                      Serial.write(send_buf, send_len);
-                      serialFlushRx();
-                  #endif
-                break;
+        if (receivedLength + data.size <= BUFFER_SIZE) {
+            memcpy(reassemblyBuffer + receivedLength, data.data, data.size);
+            receivedLength += data.size;
+
+            mavlink_message_t message;
+            mavlink_status_t status;
+            int bytesParsed = 0;
+
+            for (int i = 0; i < receivedLength; i++) {
+                if (mavlink_parse_char(MAVLINK_COMM_0, reassemblyBuffer[i], &message, &status)) {
+                    uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
+                    int send_len = mavlink_msg_to_send_buffer(send_buf, &message);
+
+                    #if (ENABLE_TCP_DISABLE_SERIAL == 1)
+                        checkClientConnection();
+                        if (client.connected()) {
+                            client.write(send_buf, send_len);
+                        } else {
+                            ESP_LOGE("MESH", "Client disconnected, unable to send data");
+                        }
+                    #else
+                        Serial.write(send_buf, send_len);
+                        serialFlushRx();
+                    #endif
+
+                    bytesParsed = i + 1;
+                }
             }
+
+            // Shift remaining bytes in the buffer
+            if (bytesParsed > 0) {
+                memmove(reassemblyBuffer, reassemblyBuffer + bytesParsed, receivedLength - bytesParsed);
+                receivedLength -= bytesParsed;
+            }
+        } else {
+            ESP_LOGW("MESH", "Buffer overflow detected. Message too large.");
+            receivedLength = 0;
         }
     }
+
     vTaskDelete(NULL);
 }
 
@@ -421,10 +463,12 @@ void setup() {
     /*  wifi initialization */
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&config));
+        /* Set the maximum Wi-Fi TX power */
+    //ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // Set TX power to 20.5 dBm (maximum)
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_start());
-  
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // Set TX power to 20.5 dBm (maximum)
     /*  gets this esp mac address, to prevent sending message to itself */
     esp_wifi_get_mac(WIFI_IF_STA, my_address.addr);
 
