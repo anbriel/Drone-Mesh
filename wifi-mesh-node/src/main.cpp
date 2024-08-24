@@ -429,16 +429,18 @@ void setup() {
 
     /* set this esp as node*/
     ESP_ERROR_CHECK(esp_mesh_set_type(MESH_IDLE));
+    /* informs this esp that root is already set */
+    ESP_ERROR_CHECK(esp_mesh_fix_root(true));
 
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
     /* mesh ID */
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
     cfg.channel = 0;
-    cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
-    memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
-    memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
-           strlen(CONFIG_MESH_ROUTER_PASSWD));
+    // cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
+    // memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
+    // memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
+    //        strlen(CONFIG_MESH_ROUTER_PASSWD));
     /* mesh softAP */
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(WIFI_AUTH_WPA_WPA2_PSK));
     cfg.mesh_ap.max_connection = 6;
@@ -447,8 +449,7 @@ void setup() {
            strlen(CONFIG_MESH_AP_PASSWD));
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
 
-    /* informs this esp that root is already set */
-    ESP_ERROR_CHECK(esp_mesh_fix_root(true));
+
 
     /* mesh start */
     ESP_ERROR_CHECK(esp_mesh_start());

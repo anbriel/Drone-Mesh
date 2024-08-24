@@ -19,7 +19,7 @@
 static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
 #define MAX_RETRY 3
 
-#define ENABLE_TCP_DISABLE_SERIAL  0
+#define ENABLE_TCP_DISABLE_Serial2  0
 
 #define BUFFER_SIZE 1024
 #define MESH_PACKET_SIZE 128
@@ -27,7 +27,7 @@ static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
 static uint8_t tx_buf[BUFFER_SIZE] = { 0 };
 static uint8_t rx_buf[RX_BUFFER_SIZE] = { 0 };
 
-#if (ENABLE_TCP_DISABLE_SERIAL == 1)
+#if (ENABLE_TCP_DISABLE_Serial2 == 1)
   int port_tcp = 5760;
   WiFiServer server(port_tcp);
   WiFiClient client;
@@ -44,7 +44,7 @@ static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
 static bool is_running = true;
 mesh_addr_t my_address;
-int InSerialPacketSize = 0;
+int InSerial2PacketSize = 0;
 int InTcpPacketSize = 0;
 
 void setup();
@@ -57,12 +57,12 @@ void loop();
 
 
 
-void serialFlushRx(void) {
-    while (Serial.available() > 0) { Serial.read(); }
+void Serial2FlushRx(void) {
+    while (Serial2.available() > 0) { Serial2.read(); }
 }
 
 void checkClientConnection() {
-  #if (ENABLE_TCP_DISABLE_SERIAL == 1) 
+  #if (ENABLE_TCP_DISABLE_Serial2 == 1) 
     if (!client.connected()) {
         ESP_LOGE("MESH", "Client disconnected, attempting to reconnect...");
         client.stop();
@@ -89,20 +89,20 @@ void esp_mesh_p2p_tx_main(void *arg)
 
         int InPacketSize = 0;
 
-        #if (ENABLE_TCP_DISABLE_SERIAL == 1) 
+        #if (ENABLE_TCP_DISABLE_Serial2 == 1) 
             checkClientConnection();
             InPacketSize = client.available();
         #else
-            InPacketSize = Serial.available();
+            InPacketSize = Serial2.available();
         #endif
 
         if (InPacketSize > 0) {
             int len = 0;
 
-            #if (ENABLE_TCP_DISABLE_SERIAL == 1)
+            #if (ENABLE_TCP_DISABLE_Serial2 == 1)
                 len = client.read(tx_buf, sizeof(tx_buf));
             #else 
-                len = Serial.read(tx_buf, sizeof(tx_buf));
+                len = Serial2.read(tx_buf, sizeof(tx_buf));
             #endif
             
             // Reduced delay for faster processing
@@ -189,7 +189,7 @@ void esp_mesh_p2p_rx_main(void *arg)
                     uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
                     int send_len = mavlink_msg_to_send_buffer(send_buf, &message);
 
-                    #if (ENABLE_TCP_DISABLE_SERIAL == 1)
+                    #if (ENABLE_TCP_DISABLE_Serial2 == 1)
                         checkClientConnection();
                         if (client.connected()) {
                             client.write(send_buf, send_len);
@@ -197,8 +197,8 @@ void esp_mesh_p2p_rx_main(void *arg)
                             ESP_LOGE("MESH", "Client disconnected, unable to send data");
                         }
                     #else
-                        Serial.write(send_buf, send_len);
-                        serialFlushRx();
+                        Serial2.write(send_buf, send_len);
+                        Serial2FlushRx();
                     #endif
 
                     bytesParsed = i + 1;
@@ -267,6 +267,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI("MESH", "<MESH_EVENT_CHILD_CONNECTED>aid:%d, "MACSTR"",
                  child_connected->aid,
                  MAC2STR(child_connected->mac));
+        esp_mesh_comm_p2p_start();
     }
     break;
     case MESH_EVENT_CHILD_DISCONNECTED: {
@@ -443,13 +444,14 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
 
 
 void setup() {
-    #if (ENABLE_TCP_DISABLE_SERIAL == 1)
+    #if (ENABLE_TCP_DISABLE_Serial2 == 1)
 
 
     #else
-      size_t rxbufsize = Serial.setRxBufferSize(4*1024); // Increased buffer size
-      size_t txbufsize = Serial.setTxBufferSize(2*1024); // Increased buffer size
-      Serial.begin(baudrate);
+      size_t rxbufsize = Serial2.setRxBufferSize(4*1024); // Increased buffer size
+      size_t txbufsize = Serial2.setTxBufferSize(2*1024); // Increased buffer size
+      Serial2.begin(baudrate, SERIAL_8N1, 16, 17);
+
 
     #endif
 
@@ -494,10 +496,10 @@ void setup() {
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
     cfg.channel = 0;
-    cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
-    memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
-    memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
-           strlen(CONFIG_MESH_ROUTER_PASSWD));
+    // cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
+    // memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
+    // memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
+    //        strlen(CONFIG_MESH_ROUTER_PASSWD));
     /* mesh softAP */
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(WIFI_AUTH_WPA_WPA2_PSK));
     cfg.mesh_ap.max_connection = 6;
@@ -512,11 +514,11 @@ void setup() {
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
     
-    #if (ENABLE_TCP_DISABLE_SERIAL == 1)
+    #if (ENABLE_TCP_DISABLE_Serial2 == 1)
         server.begin();
         server.setNoDelay(true);
     #else 
-        serialFlushRx();
+        Serial2FlushRx();
     #endif
     
 
