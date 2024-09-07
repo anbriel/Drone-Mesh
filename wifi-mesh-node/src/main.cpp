@@ -1,4 +1,4 @@
-// NODE
+// NODE NO-ROUTER
 #include "PixhawkArduinoMAVLink.h" //has mavlink.h
 #include <string.h>
 #include <inttypes.h>
@@ -13,11 +13,9 @@
 #include "driver/uart.h"
 
 /* mesh WIFI config*/
-#define CONFIG_MESH_ROUTER_SSID "Indlab-software 2.4"
-#define CONFIG_MESH_ROUTER_PASSWD "happysofts"
-#define CONFIG_MESH_AP_PASSWD "12345678"
+#define CONFIG_MESH_AP_PASSWD "12345678"   //MESH PASSWORD
 #define CONFIG_MESH_ROUTE_TABLE_SIZE 50
-static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
+static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77}; //MESH ID
 
 /* need adjustment*/
 #define BUFFER_SIZE 1024
@@ -26,10 +24,13 @@ int baudrate = 115200;
 const uart_port_t CONFIG_UART_PORT_NUM = UART_NUM_2;
 int Rtos_delay = 90;
 
-#define Drone Serial2
 #define RX_BUFFER_SIZE MESH_PACKET_SIZE
 static uint8_t tx_buf[BUFFER_SIZE] = { 0 };
 static uint8_t rx_buf[RX_BUFFER_SIZE] = { 0 };
+
+// Error counter to track persistent issues
+static int error_count = 0;
+static const int ERROR_THRESHOLD = 10;
 
 
 static bool is_mesh_connected = false;
@@ -48,10 +49,6 @@ void ip_event_handler(void *arg, esp_event_base_t event_base,
 void loop();
 
 
-void serialFlushRx(void) {
-    while (Drone.available() > 0) { Drone.read(); }
-}
-
 void esp_mesh_p2p_tx_main(void *arg)
 {
     mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
@@ -62,19 +59,20 @@ void esp_mesh_p2p_tx_main(void *arg)
         // Check if there is data available on the serial port
         size_t available_bytes = 0;
         uart_get_buffered_data_len(CONFIG_UART_PORT_NUM, &available_bytes);
+
         if (available_bytes > 0) {
-            //int len = Drone.read(tx_buf, sizeof(tx_buf));
             int len = uart_read_bytes(CONFIG_UART_PORT_NUM, tx_buf, sizeof(tx_buf), pdMS_TO_TICKS(Rtos_delay));
             
             if (len > 0) { // Proceed only if data was read
                 mavlink_message_t msg;
                 mavlink_status_t status;
+
                 for (int i = 0; i < len; ++i) {
                     if (mavlink_parse_char(MAVLINK_COMM_0, tx_buf[i], &msg, &status)) {
                         uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
                         int send_len = mavlink_msg_to_send_buffer(send_buf, &msg);
 
-                        /* batch send*/
+                        /* Batch Send */
                         int offset = 0;
                         while (offset < send_len) {
                             int packetSize = (send_len - offset) > MESH_PACKET_SIZE ? MESH_PACKET_SIZE : (send_len - offset);
@@ -90,20 +88,33 @@ void esp_mesh_p2p_tx_main(void *arg)
                             esp_err_t err = esp_mesh_send(&root_address, &data, MESH_DATA_P2P, NULL, 0);
                             if (err != ESP_OK) {
                                 ESP_LOGE("MESH", "Error sending data: %d", err);
+                                error_count++;
+                            } else {
+                                ESP_LOGI("MESH", "Data sent successfully");
+                                error_count = 0; // Reset error count on success
                             }
                             offset += packetSize;
+
+                            // Break if error threshold is reached
+                            if (error_count >= ERROR_THRESHOLD) {
+                                ESP_LOGE("MESH", "Too many errors, stopping task");
+                                is_running = false;
+                                break;
+                            }
                         }
-                        /*end*/ 
                     }
                 }
+            } else if (len < 0) {
+                ESP_LOGE("UART", "Error reading from UART: %d", len);
             }
         }   
+
+        vTaskDelay(1); // Yield to other tasks
     }
 
     // Clean up task when done
     vTaskDelete(NULL);
 }
-
 
 void esp_mesh_p2p_rx_main(void *arg)
 {
@@ -126,9 +137,14 @@ void esp_mesh_p2p_rx_main(void *arg)
         esp_err_t err = esp_mesh_recv(&from, &data, portMAX_DELAY, &flag, NULL, 0);
         if (err != ESP_OK) {
             ESP_LOGE("MESH", "Error receiving data: %d", err);
+            error_count++;
+            if (error_count >= ERROR_THRESHOLD) {
+                ESP_LOGE("MESH", "Too many errors, stopping task");
+                is_running = false;
+            }
             continue;
         } 
-        ESP_LOGE("MESH", "Data received from node successfully");
+        ESP_LOGI("MESH", "Data received from node successfully");
 
         // Check if the reassembly buffer has enough space
         if (receivedLength + data.size <= BUFFER_SIZE) {
@@ -146,8 +162,9 @@ void esp_mesh_p2p_rx_main(void *arg)
                     // Successfully parsed a message, send it out via UART
                     uint8_t send_buf[MAVLINK_MAX_PACKET_LEN];
                     int send_len = mavlink_msg_to_send_buffer(send_buf, &message);
-                    //Drone.write(send_buf, send_len);
                     uart_write_bytes(CONFIG_UART_PORT_NUM, send_buf, send_len);
+
+                    ESP_LOGI("MESH", "Mavlink message parsed and sent via UART");
 
                     // Mark the number of bytes successfully parsed
                     bytesParsed = i + 1;
@@ -164,6 +181,8 @@ void esp_mesh_p2p_rx_main(void *arg)
             ESP_LOGE("MESH", "Buffer overflow detected. Message too large.");
             receivedLength = 0;
         }
+
+        vTaskDelay(1); // Yield to other tasks
     }
 
     // Task clean-up
@@ -395,10 +414,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
 
 
 void setup() {
-    // size_t rxbufsize = Drone.setRxBufferSize(4*1024); // Increased buffer size
-    // size_t txbufsize = Drone.setTxBufferSize(1024); // Increased buffer size
-    // Drone.begin(baudrate, SERIAL_8N1, 16, 17);
-
     uart_config_t uart_config = {
         .baud_rate = 115200,
         .data_bits = UART_DATA_8_BITS,
@@ -420,9 +435,6 @@ void setup() {
     /*  wifi initialization */
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&config));
-
-    /* Set the maximum Wi-Fi TX power */
-    //ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // Set TX power to 20.5 dBm (maximum)
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -453,10 +465,7 @@ void setup() {
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
     cfg.channel = 0;
-    // cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
-    // memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
-    // memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
-    //        strlen(CONFIG_MESH_ROUTER_PASSWD));
+
     /* mesh softAP */
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(WIFI_AUTH_WPA_WPA2_PSK));
     cfg.mesh_ap.max_connection = 6;
@@ -464,22 +473,16 @@ void setup() {
     memcpy((uint8_t *) &cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD,
            strlen(CONFIG_MESH_AP_PASSWD));
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
-
-
-
     /* mesh start */
     ESP_ERROR_CHECK(esp_mesh_start());
     ESP_LOGE("MESH", "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
     
-    //serialFlushRx();
 
 }
 
 void loop()
 {
     
-
-WiFi.setTxPower(WIFI_POWER_19_5dBm);
 }
