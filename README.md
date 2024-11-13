@@ -1,3 +1,11 @@
+# Installation
+
+**[NOTE: The pre-compiled binary is for ESP32]**
+1. **Download release binary.**
+2. **Upload them to ESP via ESP flash tools.**  
+   <img src="images/eps32-flash.png" alt="Installation Image" width="500"/>
+3. **Do the configuration step twise, because rootID for devices wont display correctly at first boot**
+
 # Configuration
 
 1. **Connect a button to pin 2.** This button is for getting ESP32 into config mode.
