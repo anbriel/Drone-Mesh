@@ -220,7 +220,6 @@ public:
                 free(route_table);
             }
         }
-
         return addrs;
     }
 
@@ -1238,6 +1237,7 @@ static const int CONNECTED_BIT = BIT0;
 void setup() {
     
     uart_set_baudrate(UART_NUM_0, 921600);// communication sortie USB pour les logs
+
     uart_config_t uart_config = {//communication avec l'autopilote
         .baud_rate = 921600,
         .data_bits = UART_DATA_8_BITS,
@@ -1245,6 +1245,7 @@ void setup() {
         .stop_bits = UART_STOP_BITS_1,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
     };
+
     ESP_ERROR_CHECK(uart_param_config(CONFIG_UART_PORT_NUM, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(CONFIG_UART_PORT_NUM, 17, 16, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));//pin 17 TX2 pin 16 RX2
     ESP_ERROR_CHECK(uart_driver_install(CONFIG_UART_PORT_NUM, 2 * BUFFER_SIZE, 2 * BUFFER_SIZE, 0, NULL, 0));
@@ -1262,10 +1263,12 @@ void setup() {
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_start());
+
     if (LR_PROTOCOL){
-    const uint8_t protocol = WIFI_PROTOCOL_LR;//longue distance
-    ESP_ERROR_CHECK( esp_wifi_set_protocol(WIFI_IF_AP, protocol) );// longue distance
+        const uint8_t protocol = WIFI_PROTOCOL_LR;//longue distance
+        ESP_ERROR_CHECK( esp_wifi_set_protocol(WIFI_IF_AP, protocol) );// longue distance
     }
+
     ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // Set TX power to 20.5 dBm (maximum)
     
     /*  mesh initialization */
