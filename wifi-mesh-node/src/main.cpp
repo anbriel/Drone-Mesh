@@ -867,9 +867,7 @@ void esp_mesh_p2p_rx_main(void *arg)
                 int bytesParsed = 0;
                 for (int i = 0; i < receivedLength; i++) {
                     if (mavlink_parse_char(MAVLINK_COMM_0, reassemblyBuffer[i], &message, &status)) {
-    
                         if ((message.msgid == MAVLINK_MSG_ID_GLOBAL_POSITION_INT)) {
-                           
                             MESH_LOGE("MESH", "mysysid: %d message.sysid: %d message.msgid: %d",mysysid,message.sysid,message.msgid);
                             mavlink_global_position_int_t dataP;
                             mavlink_msg_global_position_int_decode(&message, &dataP);
