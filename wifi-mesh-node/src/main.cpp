@@ -852,6 +852,7 @@ void esp_mesh_p2p_rx_main(void *arg)
         if (data.size >= sizeof(uint8_t) && data.data[0] == 0x01) {
             esp_wifi_sta_get_ap_info(&ap_info);
             childManager.processReceivedChildInfo(data.data, data.size,ap_info.rssi);
+            mesh_addresses.printNodes();
         } else {
             // Check if the reassembly buffer has enough space
             if (receivedLength + data.size <= BUFFER_SIZE) {
@@ -1194,7 +1195,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
 void timing_summary_task(void* pvParameters) {
     while (1) {
         printTimingSummary();
-        mesh_addresses.printNodes();
+        //mesh_addresses.printNodes();
         vTaskDelay(pdMS_TO_TICKS(30000)); // Par exemple toutes les 30 secondes
     }
 }
@@ -1319,15 +1320,14 @@ void setup() {
     MESH_LOGE("MESH", "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
-       // Créer la tâche d'affichage des statistiques
+    
+    // Créer la tâche d'affichage des statistiques
     xTaskCreate(timing_summary_task, 
                 "timing_summary", 
                 4096,           // Stack size 
                 NULL,           // Task parameters
                 1,             // Priority
                 NULL);         // Task handle
-    
-
 }
 
 void loop()
