@@ -420,7 +420,6 @@ public:
         MESH_LOGE("MESH", "Network topology cleaned up after parent disconnect");
         printNodes();
     }
-
 private:
    // Nettoyer les nœuds inactifs
     void cleanupStaleNodes() {
@@ -698,8 +697,9 @@ double calculate_distance_between_positions(const mavlink_global_position_int_t*
     
     return distance;
 }
- // Convert MAC string to mesh_addr_t
-    static esp_err_t stringToMeshAddr(const char* mac_str, mesh_addr_t& mesh_addr) {
+
+ // Convert MAC string to mesh_addr_t a déplacer dans un fichier tools.cpp
+static esp_err_t stringToMeshAddr(const char* mac_str, mesh_addr_t& mesh_addr) {
         // Clear the mesh_addr
         memset(&mesh_addr, 0, sizeof(mesh_addr_t));
         
@@ -728,7 +728,7 @@ double calculate_distance_between_positions(const mavlink_global_position_int_t*
         // Copy to mesh_addr
         memcpy(mesh_addr.addr, bytes, 6);
         return ESP_OK;
-    }
+}
 
 void esp_mesh_p2p_tx_main(void *arg)
 {
@@ -811,10 +811,8 @@ void esp_mesh_p2p_tx_main(void *arg)
                 MESH_LOGE("UART", "Error reading from UART: %d", len);
             }
         }   
-
         vTaskDelay(1); // Yield to other tasks
     }
-
     // Clean up task when done
     vTaskDelete(NULL);
 }
@@ -1008,7 +1006,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         MESH_LOGE("MESH", "<MESH_EVENT_NO_PARENT_FOUND>scan times:%d",
                  no_parent->scan_times);
     }
-    /* TODO handler for the failure */
     break;
     case MESH_EVENT_PARENT_CONNECTED: {
         mesh_event_connected_t *connected = (mesh_event_connected_t *)event_data;
@@ -1025,7 +1022,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         
         // Mettre à jour le nœud parent dans la liste
         mesh_addresses.updateNode(mesh_parent_addr, connected->self_layer - 1, esp_mesh_is_root(),false,false,rssi);
-       
         
         esp_mesh_get_id(&id);
         MESH_LOGE("MESH",
@@ -1041,8 +1037,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         }
         esp_mesh_comm_p2p_start();
         mesh_addresses.updateSelfNode();
-        mesh_addresses.updateNode(mesh_addresses.getSelfAddress(), esp_mesh_get_layer(),false,true,true);
-        
+        mesh_addresses.updateNode(mesh_addresses.getSelfAddress(), esp_mesh_get_layer(),false,true,true);   
     }
     break;
     case MESH_EVENT_PARENT_DISCONNECTED: {
@@ -1058,7 +1053,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
 
         MESH_LOGE("MESH", " <MESH_EVENT_PARENT_DISCONNECTED>reason: %d , layer: %d ",
              disconnected->reason, mesh_layer);
-             
     }
     break;
     case MESH_EVENT_LAYER_CHANGE: {
@@ -1072,7 +1066,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         last_layer = mesh_layer;
         mesh_addresses.updateSelfNode();
         mesh_addresses.updateNode(mesh_addresses.getSelfAddress(), esp_mesh_get_layer()+1,false,true,true);
-        
     }
     break;
     case MESH_EVENT_ROOT_ADDRESS: {
@@ -1150,8 +1143,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
     case MESH_EVENT_NETWORK_STATE: {
         mesh_event_network_state_t *network_state = (mesh_event_network_state_t *)event_data;
         MESH_LOGE("MESH", "<MESH_EVENT_NETWORK_STATE>is_rootless: %d ",
-                 network_state->is_rootless);
-        
+                 network_state->is_rootless);   
     }
     break;
     case MESH_EVENT_STOP_RECONNECTION: {
@@ -1162,7 +1154,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         mesh_event_find_network_t *find_network = (mesh_event_find_network_t *)event_data;
         MESH_LOGE("MESH", "<MESH_EVENT_FIND_NETWORK>new channel: %d , router BSSID:" MACSTR "",
                  find_network->channel, MAC2STR(find_network->router_bssid));
-
     }
     break;
     case MESH_EVENT_ROUTER_SWITCH: {
@@ -1180,8 +1171,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         mesh_event_ps_duty_t *ps_duty = (mesh_event_ps_duty_t *)event_data;
         MESH_LOGE("MESH", "<MESH_EVENT_PS_CHILD_DUTY>cidx: %d , " MACSTR ", duty: %d ", ps_duty->child_connected.aid-1,
                 MAC2STR(ps_duty->child_connected.mac), ps_duty->duty);
-        
-
     }
     break;
     default:
