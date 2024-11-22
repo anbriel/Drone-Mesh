@@ -9,7 +9,7 @@
 #include "esp_mesh.h"
 #include "esp_mesh_internal.h"
 #include "nvs_flash.h"
-#include <painlessMesh.h> //has tcp related library
+#include <algorithm> 
 #include "driver/uart.h"
 #include <vector>
 

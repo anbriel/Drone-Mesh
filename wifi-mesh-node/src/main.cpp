@@ -40,7 +40,7 @@ struct MeshNodeInfo {
 class MeshAddressList {
 private:
     std::vector<MeshNodeInfo> nodes;
-    static const uint32_t NODE_TIMEOUT = 30000; // 30 secondes timeout
+    static const uint32_t NODE_TIMEOUT = 60000; // 30 secondes timeout
     mesh_addr_t current_root_addr;
     mesh_addr_t current_parent_addr;  // Stockage de l'adresse du parent
     mesh_addr_t self_addr;  // Adresse du nœud courant
@@ -79,7 +79,7 @@ public:
     void updateSelfNode() {
         // Get MAC address using ESP-MESH API
         esp_err_t ret = esp_mesh_get_id(&self_addr);
-        
+        MESH_LOGE("MESH", "1 Update Self node " MACSTR "",MAC2STR(self_addr.addr));
         
         if ((ret != ESP_OK) || !isValidMacAddress(self_addr.addr)){
             // Fallback: try to get MAC from WiFi station interface
@@ -87,11 +87,11 @@ public:
             ret = esp_wifi_get_mac(WIFI_IF_STA, temp_mac);
             if ((ret == ESP_OK) && isValidMacAddress(self_addr.addr)){
                 memcpy(self_addr.addr, temp_mac, 6);
-                
+                MESH_LOGE("MESH", "2 Update Self node " MACSTR "",MAC2STR(self_addr.addr));
             } else {
                 // Last resort: try getting base MAC address
                 ret = esp_efuse_mac_get_default(self_addr.addr);
-                
+                MESH_LOGE("MESH", "3 Update Self node " MACSTR "",MAC2STR(self_addr.addr));
                 if (ret != ESP_OK) {
                     MESH_LOGE("MESH", "No Self node MAC");
                 }
@@ -355,7 +355,7 @@ public:
                  
    // Méthode mise à jour pour l'affichage
     void printNodes() {
-        cleanupStaleNodes();
+       // cleanupStaleNodes();
         MESH_LOGE("MESH", "Current nodes in network (%d) self_address : " MACSTR "", nodes.size(),MAC2STR(self_addr.addr));
 
         // Afficher d'abord le nœud racine
@@ -937,7 +937,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
 {
     mesh_addr_t id = {0,};
     static uint16_t last_layer = 0;
-
+    MESH_LOGE("MESH", " EVENT_MESH ID: %d",event_id);
     switch (event_id) {
     case MESH_EVENT_STARTED: {
         mesh_timing.mesh_start_time = millis();
@@ -1048,7 +1048,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         mesh_addresses.removeNode(mesh_parent_addr);
 
         // Nettoyer la liste des nœuds car la topologie peut avoir changé
-        mesh_addresses.cleanupOnParentDisconnect();
+        //mesh_addresses.cleanupOnParentDisconnect(); a voir....
 
         MESH_LOGE("MESH", " <MESH_EVENT_PARENT_DISCONNECTED>reason: %d , layer: %d ",
              disconnected->reason, mesh_layer);
@@ -1181,7 +1181,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
 void timing_summary_task(void* pvParameters) {
     while (1) {
         printTimingSummary();
-        //mesh_addresses.printNodes();
+        mesh_addresses.printNodes();
         vTaskDelay(pdMS_TO_TICKS(30000)); // Par exemple toutes les 30 secondes
     }
 }
@@ -1311,6 +1311,9 @@ void setup() {
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
     
+    delay(2000);
+    mesh_addresses.updateSelfNode();
+    mesh_addresses.updateNode(mesh_addresses.getSelfAddress(), esp_mesh_get_layer()+1,false,true,true);
     // Créer la tâche d'affichage des statistiques
     xTaskCreate(timing_summary_task, 
                 "timing_summary", 
