@@ -16,11 +16,26 @@
 #include <vector>
 #include <math.h>
 
-#define DEBUG_MESH 1  // 0 pour désactiver les logs, 1 pour les activer
+#define DEBUG_MESH 1 // 0 pour désactiver les logs, 1 pour les activer
 #define LR_PROTOCOL 0 // 1 pour activer le wifi en mode longue range
 // Remplacer tous les MESH_LOGE par une macro personnalisée
 #define MESH_LOGE(...) do { if (DEBUG_MESH) ESP_LOGE(__VA_ARGS__); } while (0)
 
+// Ajouter après les autres structures
+struct TrafficStats {
+    uint32_t bytes_received;
+    uint32_t bytes_sent;
+    uint32_t last_update;
+    float rx_rate;  // bytes/sec
+    float tx_rate;  // bytes/sec
+    uint32_t last_rx_calc;
+    uint32_t last_tx_calc;
+    uint32_t prev_bytes_received;
+    uint32_t prev_bytes_sent;
+};
+
+// Instance globale
+static TrafficStats traffic_stats = {0};
 // Structure pour les informations des nœuds
 struct MeshNodeInfo {
     mesh_addr_t addr;
@@ -40,7 +55,7 @@ struct MeshNodeInfo {
 class MeshAddressList {
 private:
     std::vector<MeshNodeInfo> nodes;
-    static const uint32_t NODE_TIMEOUT = 60000; // 30 secondes timeout
+    static const uint32_t NODE_TIMEOUT = 60000; // 60 secondes timeout
     mesh_addr_t current_root_addr;
     mesh_addr_t current_parent_addr;  // Stockage de l'adresse du parent
     mesh_addr_t self_addr;  // Adresse du nœud courant
@@ -53,10 +68,15 @@ public:
         memset(&current_parent_addr, 0, sizeof(mesh_addr_t));
         memset(&self_addr, 0, sizeof(mesh_addr_t));
     } 
-    
+/*
+    RSSI < -90 dBm: this signal is extremely weak, at the edge of what a receiver can receive.
+    RSSI -67dBm: this is a fairly strong signal.
+    RSSI > -55dBm: this is a very strong signal.
+    RSSI > -30dBm: your sniffer is sitting right next to the transmitter.
+*/
    void adjustTxPower(MeshNodeInfo& node, int rssi) {
-        const int RSSI_TARGET_MIN = -65;  // RSSI cible minimum acceptable
-        const int RSSI_TARGET_MAX = -55;  // RSSI cible maximum acceptable
+        const int RSSI_TARGET_MIN = -67;  // RSSI cible minimum acceptable
+        const int RSSI_TARGET_MAX = -30;  // RSSI cible maximum acceptable
         const int8_t TX_POWER_MIN = 8;    // 8 dBm minimum
         const int8_t TX_POWER_MAX = 84;   // 20 dBm maximum (84/4 = 21dBm)
         
@@ -258,6 +278,7 @@ public:
                     
                     // Ajuster la puissance d'émission si nécessaire
                     if (!is_self1) {
+                        MESH_LOGE("MESH", "adjustTxPower ");
                         adjustTxPower(node, rssi);
                     }     
 
@@ -324,7 +345,7 @@ public:
 
     // Obtenir toutes les adresses actives
     std::vector<mesh_addr_t> getActiveAddresses() {
-        cleanupStaleNodes();
+        //cleanupStaleNodes();
         std::vector<mesh_addr_t> addresses;
         for (const auto& node : nodes) {
             addresses.push_back(node.addr);
@@ -348,14 +369,14 @@ public:
 
      // Obtenir le nombre de nœuds
     size_t getNodeCount() {
-        cleanupStaleNodes();
+        //cleanupStaleNodes();
         return nodes.size();
     }
  
                  
    // Méthode mise à jour pour l'affichage
     void printNodes() {
-       // cleanupStaleNodes();
+        //cleanupStaleNodes();
         MESH_LOGE("MESH", "Current nodes in network (%d) self_address : " MACSTR "", nodes.size(),MAC2STR(self_addr.addr));
 
         // Afficher d'abord le nœud racine
@@ -489,6 +510,50 @@ public:
 };
 
 MeshChildManager childManager;
+
+void updateTrafficStats(bool is_tx, size_t bytes) {
+    uint32_t current_time = millis();
+    
+    if (is_tx) {
+        traffic_stats.bytes_sent += bytes;
+        
+        // Calculer le débit d'envoi chaque seconde
+        if (current_time - traffic_stats.last_tx_calc >= 1000) {
+            traffic_stats.tx_rate = (float)(traffic_stats.bytes_sent - traffic_stats.prev_bytes_sent) * 1000.0f / 
+                                  (float)(current_time - traffic_stats.last_tx_calc);
+            traffic_stats.prev_bytes_sent = traffic_stats.bytes_sent;
+            traffic_stats.last_tx_calc = current_time;
+        }
+    } else {
+        traffic_stats.bytes_received += bytes;
+        
+        // Calculer le débit de réception chaque seconde
+        if (current_time - traffic_stats.last_rx_calc >= 1000) {
+            traffic_stats.rx_rate = (float)(traffic_stats.bytes_received - traffic_stats.prev_bytes_received) * 1000.0f / 
+                                  (float)(current_time - traffic_stats.last_rx_calc);
+            traffic_stats.prev_bytes_received = traffic_stats.bytes_received;
+            traffic_stats.last_rx_calc = current_time;
+        }
+    }
+    
+    traffic_stats.last_update = current_time;
+}
+
+// Fonction pour afficher les statistiques
+void printTrafficStats() {
+    char time_str[9];
+    uint32_t current_time = millis() / 1000; // Convertir en secondes
+    sprintf(time_str, "%02d:%02d:%02d", 
+            (current_time / 3600) % 24,
+            (current_time / 60) % 60,
+            current_time % 60);
+            
+    MESH_LOGE("TRAFFIC", "[%s] Stats:", time_str);
+    MESH_LOGE("TRAFFIC", "  Total RX: %u bytes (%.2f bytes/sec)", 
+              traffic_stats.bytes_received, traffic_stats.rx_rate);
+    MESH_LOGE("TRAFFIC", "  Total TX: %u bytes (%.2f bytes/sec)", 
+              traffic_stats.bytes_sent, traffic_stats.tx_rate);
+}
 
 /* mesh WIFI config*/
 #define CONFIG_MESH_AP_PASSWD "12345678"   //MESH PASSWORD
@@ -782,7 +847,10 @@ void esp_mesh_p2p_tx_main(void *arg)
                                     if  ((!node.is_root)&&(!mesh_addresses.isSelfAddress(node.addr))){
                                         MESH_LOGE("MESH"," Data send to node " MACSTR "  successfully %d ",MAC2STR(node.addr.addr),msg.msgid);
                                         esp_err_t err = esp_mesh_send(&node.addr, &data, MESH_DATA_P2P, NULL, 0);
-                                        if (err != ESP_OK) {
+                                        if (err == ESP_OK) {
+                                            updateTrafficStats(true, data.size);  // Ajouter cette ligne
+                                        }
+                                        else {
                                             MESH_LOGE("MESH", " Error broadcasting position: %d", err);
                                         }
                                     } 
@@ -792,7 +860,10 @@ void esp_mesh_p2p_tx_main(void *arg)
                             }
                             
                             esp_err_t err = esp_mesh_send(&root_address, &data, MESH_DATA_P2P, NULL, 0);
-                            if (err != ESP_OK) {
+                            if (err == ESP_OK) {
+                                updateTrafficStats(true, data.size);  // Ajouter cette ligne
+                            }
+                            else {
                                MESH_LOGE("MESH"," Error sending data: %d", err);
                             } 
                             offset += packetSize;
@@ -835,6 +906,9 @@ void esp_mesh_p2p_rx_main(void *arg)
         data.size = sizeof(rx_buf);
         
         esp_err_t err = esp_mesh_recv(&from, &data, portMAX_DELAY, &flag, NULL, 0);
+        if (err == ESP_OK) {
+            updateTrafficStats(false, data.size);  // Ajouter cette ligne
+        }
         mesh_addresses.NodeSeen(from);
         if (err != ESP_OK) {
             MESH_LOGE("MESH", "Error receiving data: %d", err);
@@ -1182,6 +1256,7 @@ void timing_summary_task(void* pvParameters) {
     while (1) {
         printTimingSummary();
         mesh_addresses.printNodes();
+        printTrafficStats();
         vTaskDelay(pdMS_TO_TICKS(30000)); // Par exemple toutes les 30 secondes
     }
 }
@@ -1233,6 +1308,98 @@ static const int CONNECTED_BIT = BIT0;
     }
 }*/
 
+// Fonction pour configurer le protocole LR
+void configureLRProtocol() {
+    // Configuration du protocole LR pour l'interface AP
+    uint8_t protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR;
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR));
+    
+    // Configuration du protocole LR pour l'interface STA
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR));
+}
+/*
+void setup() {
+    uart_set_baudrate(UART_NUM_0, 921600);
+
+    uart_config_t uart_config = {
+        .baud_rate = 921600,
+        .data_bits = UART_DATA_8_BITS,
+        .parity    = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+    };
+
+    ESP_ERROR_CHECK(uart_param_config(CONFIG_UART_PORT_NUM, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(CONFIG_UART_PORT_NUM, 17, 16, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_driver_install(CONFIG_UART_PORT_NUM, 2 * BUFFER_SIZE, 2 * BUFFER_SIZE, 0, NULL, 0));
+
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(esp_netif_create_default_wifi_mesh_netifs(&netif_sta, NULL));
+
+    // Configuration WiFi avec support LR
+    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
+    config.ampdu_tx_enable = 0;  // Désactiver AMPDU pour le mode LR
+    ESP_ERROR_CHECK(esp_wifi_init(&config));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Configurer le protocole LR
+    configureLRProtocol();
+
+    // Configuration de la puissance maximale
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // 20.5 dBm
+
+    // Initialisation du mesh
+    ESP_ERROR_CHECK(esp_mesh_init());
+    ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID, &mesh_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_mesh_set_topology(MESH_TOPO_TREE));
+    ESP_ERROR_CHECK(esp_mesh_set_max_layer(6));
+    ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
+    ESP_ERROR_CHECK(esp_mesh_set_xon_qsize(128));
+    ESP_ERROR_CHECK(esp_mesh_disable_ps());
+    
+    // Augmenter le temps d'expiration pour les connexions LR
+    ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(360));  // Augmenté pour LR
+
+    ESP_ERROR_CHECK(esp_mesh_set_type(MESH_IDLE));
+    ESP_ERROR_CHECK(esp_mesh_fix_root(true));
+
+    mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
+    memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
+    cfg.channel = 0;
+
+    // Configuration AP
+    ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(WIFI_AUTH_WPA_WPA2_PSK));
+    cfg.mesh_ap.max_connection = 6;
+    cfg.mesh_ap.nonmesh_max_connection = 0;
+    memcpy((uint8_t *) &cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD,
+           strlen(CONFIG_MESH_AP_PASSWD));
+
+    ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
+    ESP_ERROR_CHECK(esp_mesh_start());
+
+    MESH_LOGE("MESH", "mesh starts successfully with LR protocol, heap:%" PRId32 ", %s<%d>%s, ps:%d",  
+             esp_get_minimum_free_heap_size(),
+             esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
+             esp_mesh_get_topology(), 
+             esp_mesh_get_topology() ? "(chain)":"(tree)", 
+             esp_mesh_is_ps_enabled());
+    
+    delay(2000);
+    mesh_addresses.updateSelfNode();
+    mesh_addresses.updateNode(mesh_addresses.getSelfAddress(), esp_mesh_get_layer()+1, false, true, true);
+
+    xTaskCreate(timing_summary_task, 
+                "timing_summary", 
+                4096,
+                NULL,
+                1,
+                NULL);
+}
+*/
 
 void setup() {
     
@@ -1247,7 +1414,7 @@ void setup() {
     };
 
     ESP_ERROR_CHECK(uart_param_config(CONFIG_UART_PORT_NUM, &uart_config));
-    ESP_ERROR_CHECK(uart_set_pin(CONFIG_UART_PORT_NUM, 17, 16, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));//pin 17 TX2 pin 16 RX2
+    ESP_ERROR_CHECK(uart_set_pin(CONFIG_UART_PORT_NUM, 17, 16, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));//pin WIFI_PROTOCOL_1117 TX2 pin 16 RX2
     ESP_ERROR_CHECK(uart_driver_install(CONFIG_UART_PORT_NUM, 2 * BUFFER_SIZE, 2 * BUFFER_SIZE, 0, NULL, 0));
 
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -1266,7 +1433,7 @@ void setup() {
 
     if (LR_PROTOCOL){
         const uint8_t protocol = WIFI_PROTOCOL_LR;//longue distance
-        ESP_ERROR_CHECK( esp_wifi_set_protocol(WIFI_IF_AP, protocol) );// longue distance
+        ESP_ERROR_CHECK( esp_wifi_set_protocol(WIFI_IF_AP,WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );// longue distance
     }
 
     ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(80));  // Set TX power to 20.5 dBm (maximum)
@@ -1311,7 +1478,7 @@ void setup() {
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
     
-    delay(2000);
+   delay(2000);
     mesh_addresses.updateSelfNode();
     mesh_addresses.updateNode(mesh_addresses.getSelfAddress(), esp_mesh_get_layer()+1,false,true,true);
     // Créer la tâche d'affichage des statistiques
@@ -1322,6 +1489,7 @@ void setup() {
                 1,             // Priority
                 NULL);         // Task handle
 }
+
 
 void loop()
 {

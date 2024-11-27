@@ -13,7 +13,7 @@
 #include "driver/uart.h"
 #include <vector>
 
-#define DEBUG_MESH 1  // 0 pour désactiver les logs, 1 pour les activer
+#define DEBUG_MESH 0  // 0 pour désactiver les logs, 1 pour les activer
 #define LR_PROTOCOL 0 //1 pour activer le mode longue range
 // Remplacer tous les MESH_LOGE par une macro personnalisée
 #define MESH_LOGE(...) do { if (DEBUG_MESH) ESP_LOGE(__VA_ARGS__); } while (0)
@@ -553,7 +553,6 @@ void setup() {
     ESP_ERROR_CHECK(uart_param_config(CONFIG_UART_PORT_NUM, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(CONFIG_UART_PORT_NUM, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     ESP_ERROR_CHECK(uart_driver_install(CONFIG_UART_PORT_NUM, 2 * BUFFER_SIZE, 2 * BUFFER_SIZE, 0, NULL, 0));
-
 
     ESP_ERROR_CHECK(nvs_flash_init());
     /*  tcpip initialization */
